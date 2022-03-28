@@ -1,0 +1,267 @@
+---
+title: "Assessing allele imbalance in the rat imprintome"
+author: "Keegan Korthauer"
+date: "25/03/2022"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+## Load libraries
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(broom)
+library(Biobase)
+library(ggplot2)
+theme_set(theme_bw())
+library(limma)
+library(ggfortify)
+library(edgeR)
+library(pheatmap)
+```
+
+## Read in and format data 
+
+Read in `.txt` file provided by Julien.
+
+```{r}
+ase.raw <- read.delim("Book2.txt")
+```
+
+Print basic info.
+
+```{r}
+str(ase.raw)
+length(unique(ase.raw$name))
+```
+
+Pull out sample metadata from sample names. 
+
+```{r}
+pd <- data.frame(Sample = colnames(ase.raw)[-c(1:8)])
+rownames(pd) <- pd$Sample
+attrlist <- strsplit(pd$Sample, "_")
+pd <- pd %>%
+  mutate(Cross = sapply(attrlist, function(x) x[1]),
+         Tissue =  sapply(attrlist, function(x) x[2]),
+         Rep =  sapply(attrlist, function(x) x[4]),
+         Strain = sapply(attrlist, function(x) x[5]),
+         Allele = ifelse(substr(Cross, 1, 1) == substr(Strain, 1, 1),
+                         "Maternal", "Paternal"),
+         Rat = paste0(Rep, Cross, Tissue))
+
+# change rep4 (BW EPC) to rep2 (in that cross rep2 is missing)
+pd <- pd %>%
+  mutate(Rep = gsub("rep4", "rep2", Rep))
+
+str(pd)
+
+table(pd$Cross, pd$Allele, pd$Rep, pd$Tissue)
+```
+
+There are 3 replicates for each cross in each tissue, except for the BF cross, for which there are 2 replicates. So in all, there are 11 samples for each tissue (3 reps in each FB, BW, WB, 2 reps in BF) for a total of 22 samples. Each of these has a maternal and paternal allele count, for a total of 44 rows in our dataset.
+
+Remove duplicate feature:
+
+```{r}
+length(ase.raw$name)
+length(unique(ase.raw$name))
+(tab <- which(table(ase.raw$name) == 2))
+ase.raw <- ase.raw %>%
+  filter(!name %in% names(tab))
+```
+
+Remove the following features:
+1. features with max RPKMs < 1
+2. those that don't satisfy: RPKM >= 0.5 in at least 5/11 reps per cross (total from either allele)
+3. those not on canonical autosomes
+
+```{r}
+filt1 <- ase.raw %>% 
+  select(-c(1:8)) %>%
+  apply(., 1, max) >= 1
+sum(filt1)
+
+filt2 <- ase.raw %>% 
+  select(-c(1:4, 6:8)) %>%
+  pivot_longer(names_to = "Sample",
+               values_to = "RPKM",
+               cols = -1) %>%
+  left_join(pd) %>%
+  select(-Sample, -Strain, -Rat) %>%
+  group_by(name, Cross, Tissue, Rep) %>%
+  summarize(sumRPKM = sum(RPKM)) %>%
+  ungroup() %>%
+  group_by(name, Tissue) %>%
+  summarize(total = n(),
+            pass = sum(sumRPKM >= 0.5) >= 5) %>%
+  ungroup() %>%
+  group_by(name) %>%
+  summarize(pass = sum(pass) == 2) %>%
+  ungroup() %>%
+  pull(pass)
+sum(filt2)
+
+filt3 <- ase.raw$chr %in% paste0("chr", 1:20)
+sum(filt3)
+
+filt <- filt1 & filt2 & filt3
+sum(filt)
+
+ase <- ase.raw %>% filter(filt)
+dim(ase)
+```
+
+Let's put this metadata into a single DGEList object:
+
+```{r}
+dge <- DGEList(counts = ase %>% select(-c(1:8)), 
+               samples = pd,
+               genes = ase %>% select(c(1:7)))
+dge
+```
+
+# EDA
+
+## Principal components analysis
+
+Let's plot some PCA plots to see where major variation lies.
+
+```{r}
+pca_res <- prcomp(t(dge$counts), scale. = TRUE)
+
+autoplot(pca_res, data = dge$samples, colour = 'Tissue')
+autoplot(pca_res, data = dge$samples, colour = 'Cross')
+```
+PC 1 is clearly Cross (BF/FB vs BW/WB). PC 2 is clearly tissue.
+
+
+```{r}
+autoplot(pca_res, data = dge$samples, colour = 'Cross', x = 3, y = 4)
+autoplot(pca_res, data = dge$samples, colour = 'Strain', x = 3, y = 4)
+autoplot(pca_res, data = dge$samples, colour = 'Tissue', x = 3, y = 4)
+```
+PC 3 looks like strain effects (which strain is the allele from), and PC 4 looks like interaction between cross and tissue.
+
+## Sample-sample correlation  heatmap
+
+Here we'll look at a sample-sample correlation heatmap, which will further let us look at major sources of variation and spot any potential outlier samples. 
+
+```{r}
+# Set up color scheme for heatmaps 
+bcols<-colorRampPalette(c("#000000" ,"#800000" ,"#FF8000" ,"#FFFF00", "#FFFFFF"))(20)
+
+cc <- data.frame(cor(dge$counts), 
+                 row.names = colnames(dge))
+range(cc, na.rm=T)
+
+annot_df <- dge$samples %>%
+  select(Cross, Tissue, Allele, Strain)
+pheatmap(cc, color = bcols, 
+         border_color = NA, 
+         show_rownames = FALSE, 
+         show_colnames = FALSE,
+         annotation_col = annot_df, 
+         main="Sample-Sample Correlation")
+```
+
+A few observations:
+
+* As expected, tissue is the major source of variation  
+* Cross is the next major source of variation (BF/FB vs BW/WB)  
+* Within a tissue and reciprocal cross, expression is more similar for alleles coming from the same strain than from the same type of allele (mat/pat)  
+* Within a tissue, reciprocal cross and maternal strain, mat/pat alleles are generally more similar to each other than to the opposite allele within the same rat  
+* EB samples look more heterogeneous - in particular, measurements from the BN allele in the BF/FB cross look quite different than those from the other strain in the same cross, as well as the same strain in the other cross  
+
+## Allelic expression proportions
+
+Here we want to calculate allelic expression proportions (Maternal/(Maternal + Paternal)) for each rep. 
+
+```{r}
+ase.long <- pivot_longer(data.frame(dge$counts) %>% 
+                           mutate(gene = dge$genes$name),
+                         cols = -gene,
+                         names_to = "Sample",
+                         values_to = "RPKM") %>%
+  left_join(pd) %>%
+  select(-Sample, -Strain) %>%
+  pivot_wider(names_from = Allele,
+              values_from = "RPKM") %>%
+  mutate(prop = Maternal / (Maternal + Paternal)) 
+ase.long
+```
+
+Let's visualize a histogram of allelic proportions per gene.
+
+```{r}
+ase.long %>% 
+  group_by(gene, Tissue, Cross) %>%
+  summarize(prop = mean(prop)) %>%
+  ggplot() +
+  geom_histogram(aes(prop)) +
+  facet_grid(Cross ~ Tissue)
+```
+
+As we expect, most values are close to 0.5. 
+
+# Limma voom
+
+Here we'll try out using limma voom to estimate allele-specific effects within each tissue (EB and EPC). 
+
+We'll build one model to represent the entire dataset. Our model here includes blocking effects for each rat, so that we can estimate maternal vs paternal allele effects. We'll include terms to do so separately in each allele. Note that there's no need to include separate terms for cross, due to the presence of the blocking term for rat (and since we are not interested in looking at differential allele-specific expression between the crosses).
+
+```{r}
+mm <- model.matrix(~ 0 + Rat + Tissue:Allele,
+                   data = dge$samples)
+
+# drop redundant terms to get to full rank
+mm <- mm[,!grepl("AlleleMaternal", colnames(mm))]
+colnames(mm)
+
+# don't normalize for library size (diff is within sample)
+y <- voom(dge, mm, plot = TRUE, 
+          normalize.method = "none", 
+          lib.size = rep(1, ncol(dge)))
+
+fit <- lmFit(y, mm)
+fit <- eBayes(fit)
+```
+
+First we'll pull out the results for significant allele effects in EB:
+
+```{r}
+# pull out test for EB
+res_EB <- topTable(fit, coef = "TissueEB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EB)
+sum(res_EB$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EB$adj.P.Val < 0.05)` significant hits in EB.
+
+First we'll pull out the results for significant allele effects in EPC:
+
+```{r}
+# pull out test for EPC
+res_EPC <- topTable(fit, coef = "TissueEPC:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EPC)
+sum(res_EPC$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EPC$adj.P.Val < 0.05)` significant hits in EB.
+
+Look for overlap between the two:
+
+```{r}
+ix <- which(res_EB[res_EB$adj.P.Val < 0.05,]$name %in% res_EPC[res_EPC$adj.P.Val < 0.05,]$name)
+length(ix)
+res_EB[res_EB$adj.P.Val < 0.05,]$name[ix]
+```
+
+We see that `r signif(100*length(ix)/sum(res_EB$adj.P.Val < 0.05),3)`% of the significant hits in EB are also significant in EPC. 
