@@ -23,6 +23,7 @@ library(limma)
 library(ggfortify)
 library(edgeR)
 library(pheatmap)
+library(UpSetR)
 ```
 
 ## Read in and format data 
@@ -53,7 +54,9 @@ pd <- pd %>%
          Strain = sapply(attrlist, function(x) x[5]),
          Allele = ifelse(substr(Cross, 1, 1) == substr(Strain, 1, 1),
                          "Maternal", "Paternal"),
-         Rat = paste0(Rep, Cross, Tissue))
+         Rat = paste0(Rep, Cross, Tissue),
+         Cross_group = ifelse(Cross %in% c("BF", "FB"), "BF/FB", "BW/WB"),
+         Cross_direction = ifelse(Cross %in% c("BF", "BW"), "Forward", "Reverse"))
 
 # change rep4 (BW EPC) to rep2 (in that cross rep2 is missing)
 pd <- pd %>%
@@ -77,9 +80,10 @@ ase.raw <- ase.raw %>%
 ```
 
 Remove the following features:
-1. features with max RPKMs < 1
-2. those that don't satisfy: RPKM >= 0.5 in at least 5/11 reps per cross (total from either allele)
-3. those not on canonical autosomes
+
+1. features with max RPKMs < 1  
+2. those that don't satisfy: RPKM >= 0.5 in at least 5/11 reps per cross (total from either allele)  
+3. those not on canonical autosomes  
 
 ```{r}
 filt1 <- ase.raw %>% 
@@ -138,7 +142,10 @@ pca_res <- prcomp(t(dge$counts), scale. = TRUE)
 autoplot(pca_res, data = dge$samples, colour = 'Tissue')
 autoplot(pca_res, data = dge$samples, colour = 'Cross')
 ```
+
 PC 1 is clearly Cross (BF/FB vs BW/WB). PC 2 is clearly tissue.
+
+Let's look at the next couple PCs.
 
 
 ```{r}
@@ -146,6 +153,7 @@ autoplot(pca_res, data = dge$samples, colour = 'Cross', x = 3, y = 4)
 autoplot(pca_res, data = dge$samples, colour = 'Strain', x = 3, y = 4)
 autoplot(pca_res, data = dge$samples, colour = 'Tissue', x = 3, y = 4)
 ```
+
 PC 3 looks like strain effects (which strain is the allele from), and PC 4 looks like interaction between cross and tissue.
 
 ## Sample-sample correlation  heatmap
@@ -196,20 +204,39 @@ ase.long <- pivot_longer(data.frame(dge$counts) %>%
 ase.long
 ```
 
-Let's visualize a histogram of allelic proportions per gene.
+Let's visualize a histogram of maternal allelic proportions per gene.
 
 ```{r}
 ase.long %>% 
   group_by(gene, Tissue, Cross) %>%
-  summarize(prop = mean(prop)) %>%
+  summarize(meanprop = mean(prop, na.rm = TRUE),
+            n = sum(!is.na(prop))) %>%
+  filter(n > 1) %>%
   ggplot() +
-  geom_histogram(aes(prop)) +
+  geom_histogram(aes(meanprop)) +
   facet_grid(Cross ~ Tissue)
 ```
 
 As we expect, most values are close to 0.5. 
 
+### Scatterplots of maternal allele proportions by forward/reverse cross
+
+```{r}
+ase.long %>% 
+  group_by(gene, Tissue, Cross, Cross_group, Cross_direction) %>%
+  summarize(meanprop = mean(prop, na.rm = TRUE),
+            n = sum(!is.na(prop))) %>%
+  filter(n > 1) %>%
+  pivot_wider(id_cols = c(gene, Tissue, Cross_group), 
+              names_from = Cross_direction, values_from = meanprop) %>%
+  ggplot() +
+  geom_point(aes(x = Forward, y = Reverse), alpha = 0.2, size = 0.5) +
+  facet_grid(Cross_group ~ Tissue)
+```
+
 # Limma voom
+
+## Test within tissue
 
 Here we'll try out using limma voom to estimate allele-specific effects within each tissue (EB and EPC). 
 
@@ -242,9 +269,9 @@ head(res_EB)
 sum(res_EB$adj.P.Val < 0.05)
 ```
 
-There are `r sum(res_EB$adj.P.Val < 0.05)` significant hits in EB.
+There are `r sum(res_EB$adj.P.Val < 0.05)` significant hits in EB
 
-First we'll pull out the results for significant allele effects in EPC:
+Let's pull out the results for significant allele effects in EPC:
 
 ```{r}
 # pull out test for EPC
@@ -254,14 +281,147 @@ head(res_EPC)
 sum(res_EPC$adj.P.Val < 0.05)
 ```
 
-There are `r sum(res_EPC$adj.P.Val < 0.05)` significant hits in EB.
+There are `r sum(res_EPC$adj.P.Val < 0.05)` significant hits in EPC.
 
 Look for overlap between the two:
 
 ```{r}
-ix <- which(res_EB[res_EB$adj.P.Val < 0.05,]$name %in% res_EPC[res_EPC$adj.P.Val < 0.05,]$name)
+ix <- which((res_EB %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+            (res_EPC %>% filter(adj.P.Val < 0.05) %>% pull(name)))
 length(ix)
-res_EB[res_EB$adj.P.Val < 0.05,]$name[ix]
+res_EB %>%
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix) %>%
+  pull(name)
 ```
 
 We see that `r signif(100*length(ix)/sum(res_EB$adj.P.Val < 0.05),3)`% of the significant hits in EB are also significant in EPC. 
+
+
+## Test within cross and tissue
+
+Here we'll try out using limma voom to estimate allele-specific effects within each tissue (EB and EPC) and cross (BF/FB and WB/BW). The difference between the previous model is that now we'll look at effects in each cross group instead of averaged over both.
+
+```{r}
+mm <- model.matrix(~ 0 + Rat + Tissue:Cross_group:Allele,
+                   data = dge$samples)
+
+# drop redundant terms to get to full rank
+mm <- mm[,!grepl("AlleleMaternal", colnames(mm))]
+colnames(mm)
+
+# don't normalize for library size (diff is within sample)
+y <- voom(dge, mm, plot = TRUE, 
+          normalize.method = "none", 
+          lib.size = rep(1, ncol(dge)))
+
+fit <- lmFit(y, mm)
+fit <- eBayes(fit)
+```
+
+### EB 
+
+First we'll pull out the results for significant allele effects in EB for BF/FB:
+
+```{r}
+# pull out test in EB for BF/FB
+res_EB_BF <- topTable(fit, coef = "TissueEB:Cross_groupBF/FB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EB_BF)
+sum(res_EB_BF$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EB_BF$adj.P.Val < 0.05)` significant hits in EB for BF/FB.
+
+Next, we'll pull out the results for significant allele effects in EB for BW/WB:
+
+```{r}
+# pull out test in EB for BW/WB
+res_EB_BW <- topTable(fit, coef = "TissueEB:Cross_groupBW/WB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EB_BW)
+sum(res_EB_BW$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EB_BW$adj.P.Val < 0.05)` significant hits in EB for BW/WB.
+
+How much overlap between the crosses in EB?
+
+```{r}
+ix_EB <- which((res_EB_BF %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+               (res_EB_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)))
+length(ix_EB)
+res_EB_BF %>% 
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix_EB) %>%
+  pull(name)
+```
+
+We see that `r signif(100*length(ix_EB)/sum(res_EB_BF$adj.P.Val < 0.05),3)`% of the significant EB hits in BF/FB are also significant in BW/WB. 
+
+### EPC
+
+First we'll pull out the results for significant allele effects in EPC for BF/FB:
+
+```{r}
+# pull out test in EPC for BF/FB
+res_EPC_BF <- topTable(fit, coef = "TissueEPC:Cross_groupBF/FB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EPC_BF)
+sum(res_EPC_BF$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EPC_BF$adj.P.Val < 0.05)` significant hits in EPC for BF/FB.
+
+Next, we'll pull out the results for significant allele effects in EPC for BW/WB:
+
+```{r}
+# pull out test in EPC for BW/WB
+res_EPC_BW <- topTable(fit, coef = "TissueEPC:Cross_groupBW/WB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EPC_BW)
+sum(res_EPC_BW$adj.P.Val < 0.05)
+```
+
+There are `r sum(res_EPC_BW$adj.P.Val < 0.05)` significant hits in EPC for BW/WB.
+
+How much overlap between the crosses in EPC?
+
+```{r}
+ix_EPC <- which((res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+               (res_EPC_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)))
+length(ix_EPC)
+res_EPC_BF %>% 
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix_EPC) %>%
+  pull(name)
+```
+
+We see that `r signif(100*length(ix_EPC)/sum(res_EPC_BF$adj.P.Val < 0.05),3)`% of the significant EPC hits in BF/FB are also significant in BW/WB. 
+
+### Overlap between crosses and tissues
+
+Any hits across all comparisons (in each cross and tissue)?
+
+```{r}
+ix_all <- which((res_EB_BF %>% filter(adj.P.Val < 0.05) %>% slice(ix_EB) %>% pull(name)) %in% 
+                (res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% slice(ix_EPC) %>% pull(name)))
+length(ix_all)
+res_EB_BF %>% 
+  filter(adj.P.Val < 0.05) %>% 
+  slice(ix_EB) %>% 
+  slice(ix_all) %>% 
+  pull(name)
+```
+
+UpSet Plot to visualize overlaps between four lists of hits.
+
+```{r}
+listInput <- list(
+  EB_BF = res_EB_BF %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EB_BW = res_EB_BW %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EPC_BF = res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EPC_BW = res_EPC_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)
+)
+upset(fromList(listInput), order.by = "freq")
+```

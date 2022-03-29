@@ -17,6 +17,7 @@ library(limma)
 library(ggfortify)
 library(edgeR)
 library(pheatmap)
+library(UpSetR)
 ```
 
 ## Read in and format data
@@ -106,7 +107,9 @@ pd <- pd %>%
          Strain = sapply(attrlist, function(x) x[5]),
          Allele = ifelse(substr(Cross, 1, 1) == substr(Strain, 1, 1),
                          "Maternal", "Paternal"),
-         Rat = paste0(Rep, Cross, Tissue))
+         Rat = paste0(Rep, Cross, Tissue),
+         Cross_group = ifelse(Cross %in% c("BF", "FB"), "BF/FB", "BW/WB"),
+         Cross_direction = ifelse(Cross %in% c("BF", "BW"), "Forward", "Reverse"))
 
 # change rep4 (BW EPC) to rep2 (in that cross rep2 is missing)
 pd <- pd %>%
@@ -115,14 +118,16 @@ pd <- pd %>%
 str(pd)
 ```
 
-    ## 'data.frame':    44 obs. of  7 variables:
-    ##  $ Sample: chr  "BW_EB_RNA_rep1_BN_F1540_q255_RPM" "BW_EB_RNA_rep1_WKY_NCrl_F1540_q255_RPM" "BW_EB_RNA_rep2_BN_F1540_q255_RPM" "BW_EB_RNA_rep2_WKY_NCrl_F1540_q255_RPM" ...
-    ##  $ Cross : chr  "BW" "BW" "BW" "BW" ...
-    ##  $ Tissue: chr  "EB" "EB" "EB" "EB" ...
-    ##  $ Rep   : chr  "rep1" "rep1" "rep2" "rep2" ...
-    ##  $ Strain: chr  "BN" "WKY" "BN" "WKY" ...
-    ##  $ Allele: chr  "Maternal" "Paternal" "Maternal" "Paternal" ...
-    ##  $ Rat   : chr  "rep1BWEB" "rep1BWEB" "rep2BWEB" "rep2BWEB" ...
+    ## 'data.frame':    44 obs. of  9 variables:
+    ##  $ Sample         : chr  "BW_EB_RNA_rep1_BN_F1540_q255_RPM" "BW_EB_RNA_rep1_WKY_NCrl_F1540_q255_RPM" "BW_EB_RNA_rep2_BN_F1540_q255_RPM" "BW_EB_RNA_rep2_WKY_NCrl_F1540_q255_RPM" ...
+    ##  $ Cross          : chr  "BW" "BW" "BW" "BW" ...
+    ##  $ Tissue         : chr  "EB" "EB" "EB" "EB" ...
+    ##  $ Rep            : chr  "rep1" "rep1" "rep2" "rep2" ...
+    ##  $ Strain         : chr  "BN" "WKY" "BN" "WKY" ...
+    ##  $ Allele         : chr  "Maternal" "Paternal" "Maternal" "Paternal" ...
+    ##  $ Rat            : chr  "rep1BWEB" "rep1BWEB" "rep2BWEB" "rep2BWEB" ...
+    ##  $ Cross_group    : chr  "BW/WB" "BW/WB" "BW/WB" "BW/WB" ...
+    ##  $ Cross_direction: chr  "Forward" "Forward" "Forward" "Forward" ...
 
 ``` r
 table(pd$Cross, pd$Allele, pd$Rep, pd$Tissue)
@@ -214,9 +219,12 @@ ase.raw <- ase.raw %>%
   filter(!name %in% names(tab))
 ```
 
-Remove the following features: 1. features with max RPKMs \< 1 2. those
-that don’t satisfy: RPKM \>= 0.5 in at least 5/11 reps per cross (total
-from either allele) 3. those not on canonical autosomes
+Remove the following features:
+
+1.  features with max RPKMs \< 1  
+2.  those that don’t satisfy: RPKM >= 0.5 in at least 5/11 reps per
+    cross (total from either allele)  
+3.  those not on canonical autosomes
 
 ``` r
 filt1 <- ase.raw %>% 
@@ -445,12 +453,12 @@ dge
     ## BW_EB_RNA_rep2_BN_F1540_q255_RPM          BW     EB rep2     BN Maternal
     ## BW_EB_RNA_rep2_WKY_NCrl_F1540_q255_RPM    BW     EB rep2    WKY Paternal
     ## BW_EB_RNA_rep3_BN_F1540_q255_RPM          BW     EB rep3     BN Maternal
-    ##                                             Rat
-    ## BW_EB_RNA_rep1_BN_F1540_q255_RPM       rep1BWEB
-    ## BW_EB_RNA_rep1_WKY_NCrl_F1540_q255_RPM rep1BWEB
-    ## BW_EB_RNA_rep2_BN_F1540_q255_RPM       rep2BWEB
-    ## BW_EB_RNA_rep2_WKY_NCrl_F1540_q255_RPM rep2BWEB
-    ## BW_EB_RNA_rep3_BN_F1540_q255_RPM       rep3BWEB
+    ##                                             Rat Cross_group Cross_direction
+    ## BW_EB_RNA_rep1_BN_F1540_q255_RPM       rep1BWEB       BW/WB         Forward
+    ## BW_EB_RNA_rep1_WKY_NCrl_F1540_q255_RPM rep1BWEB       BW/WB         Forward
+    ## BW_EB_RNA_rep2_BN_F1540_q255_RPM       rep2BWEB       BW/WB         Forward
+    ## BW_EB_RNA_rep2_WKY_NCrl_F1540_q255_RPM rep2BWEB       BW/WB         Forward
+    ## BW_EB_RNA_rep3_BN_F1540_q255_RPM       rep3BWEB       BW/WB         Forward
     ## 39 more rows ...
     ## 
     ## $genes
@@ -481,7 +489,10 @@ autoplot(pca_res, data = dge$samples, colour = 'Cross')
 ```
 
 ![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-8-2.png)<!-- -->
+
 PC 1 is clearly Cross (BF/FB vs BW/WB). PC 2 is clearly tissue.
+
+Let’s look at the next couple PCs.
 
 ``` r
 autoplot(pca_res, data = dge$samples, colour = 'Cross', x = 3, y = 4)
@@ -500,6 +511,7 @@ autoplot(pca_res, data = dge$samples, colour = 'Tissue', x = 3, y = 4)
 ```
 
 ![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-9-3.png)<!-- -->
+
 PC 3 looks like strain effects (which strain is the allele from), and PC
 4 looks like interaction between cross and tissue.
 
@@ -572,29 +584,31 @@ ase.long <- pivot_longer(data.frame(dge$counts) %>%
 ase.long
 ```
 
-    ## # A tibble: 468,490 × 8
-    ##    gene        Cross Tissue Rep   Rat      Maternal Paternal  prop
-    ##    <chr>       <chr> <chr>  <chr> <chr>       <dbl>    <dbl> <dbl>
-    ##  1 XR_589830.2 BW    EB     rep1  rep1BWEB      0          0   NaN
-    ##  2 XR_589830.2 BW    EB     rep2  rep2BWEB      0          0   NaN
-    ##  3 XR_589830.2 BW    EB     rep3  rep3BWEB      0          0   NaN
-    ##  4 XR_589830.2 WB    EB     rep1  rep1WBEB      0          0   NaN
-    ##  5 XR_589830.2 WB    EB     rep2  rep2WBEB      0          0   NaN
-    ##  6 XR_589830.2 WB    EB     rep3  rep3WBEB      0          0   NaN
-    ##  7 XR_589830.2 BF    EB     rep1  rep1BFEB      0          0   NaN
-    ##  8 XR_589830.2 BF    EB     rep2  rep2BFEB     13.1        0     1
-    ##  9 XR_589830.2 FB    EB     rep1  rep1FBEB      0          0   NaN
-    ## 10 XR_589830.2 FB    EB     rep2  rep2FBEB      0          0   NaN
-    ## # … with 468,480 more rows
+    ## # A tibble: 468,490 × 10
+    ##    gene   Cross Tissue Rep   Rat   Cross_group Cross_direction Maternal Paternal
+    ##    <chr>  <chr> <chr>  <chr> <chr> <chr>       <chr>              <dbl>    <dbl>
+    ##  1 XR_58… BW    EB     rep1  rep1… BW/WB       Forward              0          0
+    ##  2 XR_58… BW    EB     rep2  rep2… BW/WB       Forward              0          0
+    ##  3 XR_58… BW    EB     rep3  rep3… BW/WB       Forward              0          0
+    ##  4 XR_58… WB    EB     rep1  rep1… BW/WB       Reverse              0          0
+    ##  5 XR_58… WB    EB     rep2  rep2… BW/WB       Reverse              0          0
+    ##  6 XR_58… WB    EB     rep3  rep3… BW/WB       Reverse              0          0
+    ##  7 XR_58… BF    EB     rep1  rep1… BF/FB       Forward              0          0
+    ##  8 XR_58… BF    EB     rep2  rep2… BF/FB       Forward             13.1        0
+    ##  9 XR_58… FB    EB     rep1  rep1… BF/FB       Reverse              0          0
+    ## 10 XR_58… FB    EB     rep2  rep2… BF/FB       Reverse              0          0
+    ## # … with 468,480 more rows, and 1 more variable: prop <dbl>
 
-Let’s visualize a histogram of allelic proportions per gene.
+Let’s visualize a histogram of maternal allelic proportions per gene.
 
 ``` r
 ase.long %>% 
   group_by(gene, Tissue, Cross) %>%
-  summarize(prop = mean(prop)) %>%
+  summarize(meanprop = mean(prop, na.rm = TRUE),
+            n = sum(!is.na(prop))) %>%
+  filter(n > 1) %>%
   ggplot() +
-  geom_histogram(aes(prop)) +
+  geom_histogram(aes(meanprop)) +
   facet_grid(Cross ~ Tissue)
 ```
 
@@ -602,13 +616,34 @@ ase.long %>%
 
     ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
 
-    ## Warning: Removed 90182 rows containing non-finite values (stat_bin).
-
 ![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
 As we expect, most values are close to 0.5.
 
+### Scatterplots of maternal allele proportions by forward/reverse cross
+
+``` r
+ase.long %>% 
+  group_by(gene, Tissue, Cross, Cross_group, Cross_direction) %>%
+  summarize(meanprop = mean(prop, na.rm = TRUE),
+            n = sum(!is.na(prop))) %>%
+  filter(n > 1) %>%
+  pivot_wider(id_cols = c(gene, Tissue, Cross_group), 
+              names_from = Cross_direction, values_from = meanprop) %>%
+  ggplot() +
+  geom_point(aes(x = Forward, y = Reverse), alpha = 0.2, size = 0.5) +
+  facet_grid(Cross_group ~ Tissue)
+```
+
+    ## `summarise()` has grouped output by 'gene', 'Tissue', 'Cross', 'Cross_group'. You can override using the `.groups` argument.
+
+    ## Warning: Removed 8060 rows containing missing values (geom_point).
+
+![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+
 # Limma voom
+
+## Test within tissue
 
 Here we’ll try out using limma voom to estimate allele-specific effects
 within each tissue (EB and EPC).
@@ -650,7 +685,7 @@ y <- voom(dge, mm, plot = TRUE,
           lib.size = rep(1, ncol(dge)))
 ```
 
-![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
 
 ``` r
 fit <- lmFit(y, mm)
@@ -687,9 +722,9 @@ sum(res_EB$adj.P.Val < 0.05)
 
     ## [1] 20
 
-There are 20 significant hits in EB.
+There are 20 significant hits in EB
 
-First we’ll pull out the results for significant allele effects in EPC:
+Let’s pull out the results for significant allele effects in EPC:
 
 ``` r
 # pull out test for EPC
@@ -719,19 +754,23 @@ sum(res_EPC$adj.P.Val < 0.05)
 
     ## [1] 445
 
-There are 445 significant hits in EB.
+There are 445 significant hits in EPC.
 
 Look for overlap between the two:
 
 ``` r
-ix <- which(res_EB[res_EB$adj.P.Val < 0.05,]$name %in% res_EPC[res_EPC$adj.P.Val < 0.05,]$name)
+ix <- which((res_EB %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+            (res_EPC %>% filter(adj.P.Val < 0.05) %>% pull(name)))
 length(ix)
 ```
 
     ## [1] 15
 
 ``` r
-res_EB[res_EB$adj.P.Val < 0.05,]$name[ix]
+res_EB %>%
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix) %>%
+  pull(name)
 ```
 
     ##  [1] "XM_017594511.1" "MSTRG.8729.1"   "MSTRG.8729.2"   "NR_131064.1"   
@@ -741,3 +780,313 @@ res_EB[res_EB$adj.P.Val < 0.05,]$name[ix]
 
 We see that 75% of the significant hits in EB are also significant in
 EPC.
+
+## Test within cross and tissue
+
+Here we’ll try out using limma voom to estimate allele-specific effects
+within each tissue (EB and EPC) and cross (BF/FB and WB/BW). The
+difference between the previous model is that now we’ll look at effects
+in each cross group instead of averaged over both.
+
+``` r
+mm <- model.matrix(~ 0 + Rat + Tissue:Cross_group:Allele,
+                   data = dge$samples)
+
+# drop redundant terms to get to full rank
+mm <- mm[,!grepl("AlleleMaternal", colnames(mm))]
+colnames(mm)
+```
+
+    ##  [1] "Ratrep1BFEB"                              
+    ##  [2] "Ratrep1BFEPC"                             
+    ##  [3] "Ratrep1BWEB"                              
+    ##  [4] "Ratrep1BWEPC"                             
+    ##  [5] "Ratrep1FBEB"                              
+    ##  [6] "Ratrep1FBEPC"                             
+    ##  [7] "Ratrep1WBEB"                              
+    ##  [8] "Ratrep1WBEPC"                             
+    ##  [9] "Ratrep2BFEB"                              
+    ## [10] "Ratrep2BFEPC"                             
+    ## [11] "Ratrep2BWEB"                              
+    ## [12] "Ratrep2FBEB"                              
+    ## [13] "Ratrep2FBEPC"                             
+    ## [14] "Ratrep2WBEB"                              
+    ## [15] "Ratrep2WBEPC"                             
+    ## [16] "Ratrep3BWEB"                              
+    ## [17] "Ratrep3BWEPC"                             
+    ## [18] "Ratrep3FBEB"                              
+    ## [19] "Ratrep3FBEPC"                             
+    ## [20] "Ratrep3WBEB"                              
+    ## [21] "Ratrep3WBEPC"                             
+    ## [22] "Ratrep4BWEPC"                             
+    ## [23] "TissueEB:Cross_groupBF/FB:AllelePaternal" 
+    ## [24] "TissueEPC:Cross_groupBF/FB:AllelePaternal"
+    ## [25] "TissueEB:Cross_groupBW/WB:AllelePaternal" 
+    ## [26] "TissueEPC:Cross_groupBW/WB:AllelePaternal"
+
+``` r
+# don't normalize for library size (diff is within sample)
+y <- voom(dge, mm, plot = TRUE, 
+          normalize.method = "none", 
+          lib.size = rep(1, ncol(dge)))
+```
+
+![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
+
+``` r
+fit <- lmFit(y, mm)
+fit <- eBayes(fit)
+```
+
+### EB
+
+First we’ll pull out the results for significant allele effects in EB
+for BF/FB:
+
+``` r
+# pull out test in EB for BF/FB
+res_EB_BF <- topTable(fit, coef = "TissueEB:Cross_groupBF/FB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EB_BF)
+```
+
+    ##         chr     start       end strand           name             ID ExonLength
+    ## 1742   chr1 195052255 195097069      -   MSTRG.1001.3   MSTRG.1001.3      23689
+    ## 1741   chr1 195032372 195074327      - XR_001835978.1 XR_001835978.1      13741
+    ## 1743   chr1 195074327 195096595      -    NM_031117.2    NM_031117.2       1580
+    ## 10613  chr6 133743583 133796060      .  MSTRG.10797.1  MSTRG.10797.1      52477
+    ## 20552 chr16  74680620  74710704      - NM_001108878.1 NM_001108878.1       4305
+    ## 10609  chr6 133710206 133721191      - XM_017594511.1 XM_017594511.1       9383
+    ##           logFC  AveExpr         t      P.Value    adj.P.Val         B
+    ## 1742   4.838516 27.80701 35.905518 1.079510e-19 2.298816e-15 33.778134
+    ## 1741   4.290594 26.94109 22.964589 6.910279e-16 7.357719e-12 26.159202
+    ## 1743   8.250233 25.38895 12.767281 4.274291e-11 3.034034e-07 13.433659
+    ## 10613 -1.785088 26.24078 -9.018393 1.686725e-08 8.979701e-05  8.961813
+    ## 20552  5.249779 20.83758  8.562605 3.891310e-08 1.657309e-04  7.886563
+    ## 10609 -6.215243 22.61760 -8.268347 6.770945e-08 2.403121e-04  7.400424
+
+``` r
+sum(res_EB_BF$adj.P.Val < 0.05)
+```
+
+    ## [1] 42
+
+There are 42 significant hits in EB for BF/FB.
+
+Next, we’ll pull out the results for significant allele effects in EB
+for BW/WB:
+
+``` r
+# pull out test in EB for BW/WB
+res_EB_BW <- topTable(fit, coef = "TissueEB:Cross_groupBW/WB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EB_BW)
+```
+
+    ##         chr     start       end strand           name             ID ExonLength
+    ## 1742   chr1 195052255 195097069      -   MSTRG.1001.3   MSTRG.1001.3      23689
+    ## 10609  chr6 133710206 133721191      - XM_017594511.1 XM_017594511.1       9383
+    ## 1741   chr1 195032372 195074327      - XR_001835978.1 XR_001835978.1      13741
+    ## 19658 chr14  92021851  92077028      - XM_008770347.2 XM_008770347.2       5017
+    ## 10606  chr6 133658936 133691130      +    NR_131064.1    NR_131064.1       1890
+    ## 6491   chr4  29795452  29804517      +   MSTRG.8729.1   MSTRG.8729.1       2603
+    ##           logFC  AveExpr          t      P.Value    adj.P.Val         B
+    ## 1742   1.686898 27.80701  29.761452 4.373940e-18 9.314305e-14 31.636633
+    ## 10609 -8.985443 22.61760 -21.713162 2.042085e-15 2.174310e-11 21.204643
+    ## 1741   2.058507 26.94109  20.493255 6.216067e-15 4.412371e-11 24.409417
+    ## 19658 -8.955969 22.21291 -14.428367 4.619247e-12 2.459171e-08 13.563583
+    ## 10606 -9.693231 24.26449 -12.635097 5.152581e-11 2.194484e-07 12.275537
+    ## 6491   7.551712 25.92802   9.959552 3.255743e-09 1.155518e-05  9.310873
+
+``` r
+sum(res_EB_BW$adj.P.Val < 0.05)
+```
+
+    ## [1] 26
+
+There are 26 significant hits in EB for BW/WB.
+
+How much overlap between the crosses in EB?
+
+``` r
+ix_EB <- which((res_EB_BF %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+               (res_EB_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)))
+length(ix_EB)
+```
+
+    ## [1] 7
+
+``` r
+res_EB_BF %>% 
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix_EB) %>%
+  pull(name)
+```
+
+    ## [1] "MSTRG.1001.3"   "XR_001835978.1" "XM_017594511.1" "MSTRG.8729.1"  
+    ## [5] "MSTRG.8729.2"   "NR_131064.1"    "NR_027324.1"
+
+We see that 16.7% of the significant EB hits in BF/FB are also
+significant in BW/WB.
+
+### EPC
+
+First we’ll pull out the results for significant allele effects in EPC
+for BF/FB:
+
+``` r
+# pull out test in EPC for BF/FB
+res_EPC_BF <- topTable(fit, coef = "TissueEPC:Cross_groupBF/FB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EPC_BF)
+```
+
+    ##         chr     start       end strand           name             ID ExonLength
+    ## 2104   chr1 215744403 215747080      -    NR_027324.1    NR_027324.1       2325
+    ## 12602  chr7 145068289 145113507      + NM_001108119.1 NM_001108119.1       4623
+    ## 11960  chr7 118685021 118694016      + NM_001277359.1 NM_001277359.1       1512
+    ## 11961  chr7 118685180 118694016      + NM_001013175.1 NM_001013175.1       1430
+    ## 2124   chr1 216254910 216256610      +   MSTRG.1216.2   MSTRG.1216.2       1590
+    ## 19269 chr14  44889401  44918377      + NM_001025138.1 NM_001025138.1       1508
+    ##           logFC  AveExpr         t      P.Value    adj.P.Val        B
+    ## 2104  -6.073812 29.31165 -32.86229 6.211564e-19 9.936136e-15 33.55019
+    ## 12602 -7.165749 19.63528 -32.19104 9.331896e-19 9.936136e-15 30.95137
+    ## 11960 -5.615982 18.57185 -26.92984 3.107119e-17 1.334498e-13 27.27304
+    ## 11961 -5.615982 18.57185 -26.92984 3.107119e-17 1.334498e-13 27.27304
+    ## 2124  -9.896154 24.85541 -26.67795 3.734054e-17 1.334498e-13 29.01586
+    ## 19269 -7.153393 19.62707 -26.66849 3.760032e-17 1.334498e-13 28.10320
+
+``` r
+sum(res_EPC_BF$adj.P.Val < 0.05)
+```
+
+    ## [1] 351
+
+There are 351 significant hits in EPC for BF/FB.
+
+Next, we’ll pull out the results for significant allele effects in EPC
+for BW/WB:
+
+``` r
+# pull out test in EPC for BW/WB
+res_EPC_BW <- topTable(fit, coef = "TissueEPC:Cross_groupBW/WB:AllelePaternal",
+                   n = Inf, sort.by = "P")
+head(res_EPC_BW)
+```
+
+    ##         chr     start       end strand           name             ID ExonLength
+    ## 8486   chr5 138154676 138182897      +    NM_138827.1    NM_138827.1       2573
+    ## 2104   chr1 215744403 215747080      -    NR_027324.1    NR_027324.1       2325
+    ## 12602  chr7 145068289 145113507      + NM_001108119.1 NM_001108119.1       4623
+    ## 7096   chr4 156271086 156276243      - NM_001005897.1 NM_001005897.1        724
+    ## 15383 chr10  15602793  15603649      -    NM_013096.1    NM_013096.1        556
+    ## 15380 chr10  15589363  15603649      -   MSTRG.1856.1   MSTRG.1856.1        544
+    ##             logFC  AveExpr          t      P.Value    adj.P.Val        B
+    ## 8486   -0.4328638 32.23595 -154.92560 2.209629e-32 4.705405e-28 58.53726
+    ## 2104   -6.6297049 29.31165  -34.40141 2.515952e-19 2.678859e-15 34.48233
+    ## 12602  -6.5269592 19.63528  -28.88717 7.856289e-18 5.576656e-14 29.22697
+    ## 7096   -6.2792560 19.56232  -24.46731 2.018245e-16 9.158095e-13 26.45535
+    ## 15383 -10.0429038 20.94031  -24.27676 2.349770e-16 9.158095e-13 27.44923
+    ## 15380  -9.9359065 20.91892  -24.16018 2.580351e-16 9.158095e-13 27.35414
+
+``` r
+sum(res_EPC_BW$adj.P.Val < 0.05)
+```
+
+    ## [1] 527
+
+There are 527 significant hits in EPC for BW/WB.
+
+How much overlap between the crosses in EPC?
+
+``` r
+ix_EPC <- which((res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% pull(name)) %in% 
+               (res_EPC_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)))
+length(ix_EPC)
+```
+
+    ## [1] 142
+
+``` r
+res_EPC_BF %>% 
+  filter(adj.P.Val < 0.05) %>%
+  slice(ix_EPC) %>%
+  pull(name)
+```
+
+    ##   [1] "NR_027324.1"    "NM_001108119.1" "MSTRG.1216.2"   "NM_001025138.1"
+    ##   [5] "NM_001013194.2" "NM_001005897.1" "NM_001127304.1" "XM_017598419.1"
+    ##   [9] "XM_008758601.1" "NM_001134602.1" "NM_053455.2"    "NM_001037096.1"
+    ##  [13] "XM_006237322.3" "XR_001837377.1" "NM_001191896.1" "XM_008770160.2"
+    ##  [17] "NM_019336.1"    "XM_006249974.3" "XM_001063315.6" "XM_006241162.3"
+    ##  [21] "XM_017591004.1" "XM_006230269.3" "XM_017594511.1" "MSTRG.1856.1"  
+    ##  [25] "NM_001033998.2" "NM_013096.1"    "NM_172019.2"    "XM_006242140.3"
+    ##  [29] "NM_001108569.3" "NM_012523.2"    "NM_001170558.1" "XR_001837919.1"
+    ##  [33] "XR_001837920.1" "XM_017591369.1" "MSTRG.8729.1"   "MSTRG.8729.2"  
+    ##  [37] "XM_017600935.1" "NM_001271215.1" "NM_022205.3"    "XM_003750140.4"
+    ##  [41] "XM_006240004.3" "XM_017589502.1" "XM_017591207.1" "XM_006240005.3"
+    ##  [45] "XM_017591206.1" "XM_008767630.2" "NR_131064.1"    "XM_017591704.1"
+    ##  [49] "XM_006240003.3" "NM_001107737.1" "NM_013087.2"    "XR_001840564.1"
+    ##  [53] "XR_001840567.1" "XM_017588709.1" "XM_006230326.3" "XR_001840563.1"
+    ##  [57] "NM_053634.1"    "NM_173153.2"    "XM_008767946.2" "NM_012651.2"   
+    ##  [61] "XM_017593115.1" "XM_006237924.3" "NM_080479.2"    "NM_001271109.1"
+    ##  [65] "NM_001271110.1" "XM_006230325.3" "NM_001009617.1" "XM_017598196.1"
+    ##  [69] "XM_017597823.1" "XR_593071.1"    "XR_593072.1"    "XM_017596881.1"
+    ##  [73] "NM_001106314.1" "XM_008769494.2" "XM_008771159.1" "XM_006252762.3"
+    ##  [77] "NM_001106685.1" "NM_138881.1"    "NM_053734.2"    "NM_001012029.1"
+    ##  [81] "NM_020542.2"    "XM_006232518.3" "MSTRG.2715.1"   "XM_006244178.3"
+    ##  [85] "XM_017599193.1" "XM_006242190.3" "NM_001191789.1" "NM_001109890.1"
+    ##  [89] "NM_138507.2"    "XM_008769534.2" "NM_001007602.1" "XM_008765689.2"
+    ##  [93] "XM_006246770.3" "XM_017597454.1" "NM_001017504.1" "XR_001836169.1"
+    ##  [97] "XM_008761127.2" "XR_001839816.1" "NM_001191659.1" "XM_006251002.3"
+    ## [101] "XM_008762963.2" "XM_017598309.1" "MSTRG.8805.1"   "NM_001017381.1"
+    ## [105] "NM_001164143.3" "NM_001164142.3" "XM_017589341.1" "XM_017589337.1"
+    ## [109] "XM_017589335.1" "XM_017589336.1" "XM_017589334.1" "XM_017589333.1"
+    ## [113] "XM_017589340.1" "XM_006246453.3" "XM_017597078.1" "XM_006230916.2"
+    ## [117] "XM_006230915.2" "XM_008761107.2" "XM_008762867.2" "XR_001837601.1"
+    ## [121] "NM_001013062.1" "NM_053519.1"    "MSTRG.1218.1"   "XM_008767060.2"
+    ## [125] "XM_017596795.1" "XM_017590771.1" "XM_017590770.1" "XM_017590772.1"
+    ## [129] "NM_001012093.1" "NM_001106460.1" "NM_001077671.1" "XR_354304.3"   
+    ## [133] "NM_001044250.1" "NM_013171.1"    "NM_153721.1"    "XM_006242280.3"
+    ## [137] "XM_006242278.3" "XM_008762055.2" "XM_008762056.2" "XM_017594813.1"
+    ## [141] "XM_017590274.1" "XM_006234629.3"
+
+We see that 40.5% of the significant EPC hits in BF/FB are also
+significant in BW/WB.
+
+### Overlap between crosses and tissues
+
+Any hits across all comparisons (in each cross and tissue)?
+
+``` r
+ix_all <- which((res_EB_BF %>% filter(adj.P.Val < 0.05) %>% slice(ix_EB) %>% pull(name)) %in% 
+                (res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% slice(ix_EPC) %>% pull(name)))
+length(ix_all)
+```
+
+    ## [1] 5
+
+``` r
+res_EB_BF %>% 
+  filter(adj.P.Val < 0.05) %>% 
+  slice(ix_EB) %>% 
+  slice(ix_all) %>% 
+  pull(name)
+```
+
+    ## [1] "XM_017594511.1" "MSTRG.8729.1"   "MSTRG.8729.2"   "NR_131064.1"   
+    ## [5] "NR_027324.1"
+
+UpSet Plot to visualize overlaps between four lists of hits.
+
+``` r
+listInput <- list(
+  EB_BF = res_EB_BF %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EB_BW = res_EB_BW %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EPC_BF = res_EPC_BF %>% filter(adj.P.Val < 0.05) %>% pull(name),
+  EPC_BW = res_EPC_BW %>% filter(adj.P.Val < 0.05) %>% pull(name)
+)
+upset(fromList(listInput), order.by = "freq")
+```
+
+![](allele_imbalance_limma_files/figure-gfm/unnamed-chunk-26-1.png)<!-- -->
