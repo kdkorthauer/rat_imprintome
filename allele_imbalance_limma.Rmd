@@ -108,6 +108,7 @@ filt2 <- ase.raw %>%
   group_by(name) %>%
   summarize(pass = sum(pass) == 2) %>%
   ungroup() %>%
+  left_join(ase.raw, ., by = "name") %>%
   pull(pass)
 sum(filt2)
 
@@ -184,7 +185,6 @@ A few observations:
 * Cross is the next major source of variation (BF/FB vs BW/WB)  
 * Within a tissue and reciprocal cross, expression is more similar for alleles coming from the same strain than from the same type of allele (mat/pat)  
 * Within a tissue, reciprocal cross and maternal strain, mat/pat alleles are generally more similar to each other than to the opposite allele within the same rat  
-* EB samples look more heterogeneous - in particular, measurements from the BN allele in the BF/FB cross look quite different than those from the other strain in the same cross, as well as the same strain in the other cross  
 
 ## Allelic expression proportions
 
