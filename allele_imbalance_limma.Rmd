@@ -98,15 +98,15 @@ filt2 <- ase.raw %>%
                cols = -1) %>%
   left_join(pd) %>%
   select(-Sample, -Strain, -Rat) %>%
-  group_by(name, Cross, Tissue, Rep) %>%
+  group_by(name, Cross, Cross_group, Tissue, Rep) %>%
   summarize(sumRPKM = sum(RPKM)) %>%
   ungroup() %>%
-  group_by(name, Tissue) %>%
+  group_by(name, Tissue, Cross_group) %>%
   summarize(total = n(),
-            pass = sum(sumRPKM >= 0.5) >= 5) %>%
+            pass = sum(sumRPKM >= 0.5) >= 2) %>%
   ungroup() %>%
   group_by(name) %>%
-  summarize(pass = sum(pass) == 2) %>%
+  summarize(pass = sum(pass) == 4) %>%
   ungroup() %>%
   left_join(ase.raw, ., by = "name") %>%
   pull(pass)
@@ -221,7 +221,7 @@ As we expect, most values are close to 0.5.
 
 ### Scatterplots of maternal allele proportions by forward/reverse cross
 
-```{r}
+```{r, fig.width = 7, fig.height = 7}
 ase.long %>% 
   group_by(gene, Tissue, Cross, Cross_group, Cross_direction) %>%
   summarize(meanprop = mean(prop, na.rm = TRUE),
