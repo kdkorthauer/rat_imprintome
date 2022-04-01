@@ -222,8 +222,10 @@ ase.raw <- ase.raw %>%
 Remove the following features:
 
 1.  features with max RPKMs \< 1  
-2.  those that don’t satisfy: RPKM >= 0.5 in at least 5/11 reps per
-    cross (total from either allele)  
+2.  those that don’t satisfy: RPKM >= 0.5 (total from maternal and
+    paternal allele) in at least 2 out of 5 or 6 reps per cross in each
+    tissue (i.e. required to have 2 reps each for ALL four combinations
+    of tissue and cross)
 3.  those not on canonical autosomes
 
 ``` r
